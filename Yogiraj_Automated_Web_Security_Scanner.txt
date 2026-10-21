@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""
+Automated Web Security Header Scanner
+Use only on websites you own or have explicit permission to assess.
+This tool sends a single HTTP GET request and checks common defensive headers.
+"""
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from urllib.parse import urlparse
+
+import requests
+
+SECURITY_HEADERS = {
+    "strict-transport-security": "Helps enforce HTTPS after the first secure visit.",
+    "content-security-policy": "Can reduce the impact of content injection and XSS.",
+    "x-content-type-options": "Prevents MIME-type sniffing when set to nosniff.",
+    "x-frame-options": "Helps control whether pages can be embedded in frames.",
+    "referrer-policy": "Controls how much referrer information browsers send.",
+    "permissions-policy": "Restricts access to selected browser features.",
+}
+
+def normalize_url(value: str) -> str:
+    value = value.strip()
+    if not value.startswith(("http://", "https://")):
+        value = "https://" + value
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Enter a valid http:// or https:// URL.")
+    return value
+
+def scan(url: str, timeout: float = 8.0) -> dict:
+    headers = {"User-Agent": "Bootcamp-Defensive-Header-Scanner/1.0"}
+    response = requests.get(
+        url, headers=headers, timeout=timeout, allow_redirects=True
+    )
+    observed = {k.lower(): v for k, v in response.headers.items()}
+    checks = []
+    for header, purpose in SECURITY_HEADERS.items():
+        value = observed.get(header)
+        checks.append({
+            "header": header,
+            "status": "present" if value else "missing",
+            "value": value or "",
+            "purpose": purpose,
+        })
+    return {
+        "scan_time_utc": datetime.now(timezone.utc).isoformat(),
+        "requested_url": url,
+        "final_url": response.url,
+        "http_status": response.status_code,
+        "https_used": urlparse(response.url).scheme == "https",
+        "checks": checks,
+        "note": "A missing header is a review item, not proof of a vulnerability. "
+                "Interpret results in context.",
+    }
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Check common defensive HTTP response headers."
+    )
+    parser.add_argument("url", help="URL you own or are authorized to assess")
+    parser.add_argument("--timeout", type=float, default=8.0,
+                        help="Request timeout in seconds (default: 8)")
+    parser.add_argument("--json", dest="json_path",
+                        help="Save complete results to a JSON file")
+    args = parser.parse_args()
+    try:
+        url = normalize_url(args.url)
+        result = scan(url, timeout=args.timeout)
+    except (ValueError, requests.RequestException) as exc:
+        print(f"Scan failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\nAutomated Web Security Header Scan")
+    print(f"URL: {result['final_url']}")
+    print(f"HTTP status: {result['http_status']}")
+    print(f"HTTPS: {'Yes' if result['https_used'] else 'No'}\n")
+    for check in result["checks"]:
+        mark = "OK" if check["status"] == "present" else "REVIEW"
+        print(f"[{mark:6}] {check['header']}")
+        print(f"         {check['purpose']}")
+        if check["value"]:
+            print(f"         Value: {check['value']}")
+    print("\nNote:", result["note"])
+
+    if args.json_path:
+        with open(args.json_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+        print(f"\nJSON report saved to: {args.json_path}")
+
+if __name__ == "__main__":
+    main()
